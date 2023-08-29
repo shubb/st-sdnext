@@ -1,26 +1,22 @@
 # defaults
 __pycache__
-.ruff_cache
 /cache.json
-/*.json
-/*.yaml
+/config.json
 /params.txt
 /styles.csv
+/ui-config.json
 /user.css
 /webui-user.bat
 /webui-user.sh
 /html/extensions.json
-/html/themes.json
+/javascript/themes.json
 node_modules
 pnpm-lock.yaml
 package-lock.json
 venv
-.history
-**/.DS_Store
 
 # all models and temp files
 *.log
-*.log.*
 *.bak
 *.ckpt
 *.safetensors
@@ -39,9 +35,10 @@ venv
 /*.lnk
 !webui.bat
 !webui.sh
-!package.json
+!requirements.txt
 
 # all dynamic stuff
+/repositories/**/*
 /extensions/**/*
 /outputs/**/*
 /embeddings/**/*
@@ -54,12 +51,13 @@ venv
 /log
 /cert
 .vscode/
-.idea/
-/localizations
 
-# force included
+# unexcluded so folders get created
+!/repositories/.placeholder
 !/models/VAE-approx
 !/models/VAE-approx/model.pt
-!/models/Reference
-!/models/Reference/**/*
+
+# docker-specific
+/data
+docker-compose.override.yml
 !entrypoint.sh

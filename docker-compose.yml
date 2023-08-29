@@ -1,0 +1,23 @@
+name: sdnext
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        INSTALLDIR: "/webui"
+        RUN_UID: 1000
+    command: |
+      --listen
+      --docs
+      --no-download
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    image: ${REGISTRY:-saladtechnologies}/sdnext:latest
+    ports:
+      - "7860:7860"
