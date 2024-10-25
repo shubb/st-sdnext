@@ -1,26 +1,6 @@
-from typing import List
-from fastapi import FastAPI
-from pydantic import BaseModel, Field # pylint: disable=no-name-in-module
-
-
-try:
-    import pynvml as nv
-    nvml_ok = True
-except ImportError:
-    nvml_ok = False
+from installer import install, log
 
 nvml_initialized = False
-
-
-class NVMLRes(BaseModel): # definition of http response
-    name: str = Field(title="Name")
-    version: dict = Field(title="Version")
-    pci: dict = Field(title="Version")
-    memory: dict = Field(title="Version")
-    clock: dict = Field(title="Version")
-    load: dict = Field(title="Version")
-    power: list = []
-    state: str = Field(title="State")
 
 
 def get_reason(val):
@@ -40,58 +20,59 @@ def get_reason(val):
 
 def get_nvml():
     global nvml_initialized # pylint: disable=global-statement
-    global nvml_ok # pylint: disable=global-statement
-    if not nvml_ok:
-        return []
     try:
         if not nvml_initialized:
+            install('pynvml', quiet=True)
+            import pynvml # pylint: disable=redefined-outer-name
+            pynvml.nvmlInit()
+            log.debug('NVML initialized')
             nvml_initialized = True
-            nv.nvmlInit()
+        else:
+            import pynvml
         devices = []
-        for i in range(nv.nvmlDeviceGetCount()):
-            dev = nv.nvmlDeviceGetHandleByIndex(i)
+        for i in range(pynvml.nvmlDeviceGetCount()):
+            dev = pynvml.nvmlDeviceGetHandleByIndex(i)
+            try:
+                name = pynvml.nvmlDeviceGetName(dev)
+            except Exception:
+                name = ''
             device = {
-                'name': nv.nvmlDeviceGetName(dev),
+                'name': name,
                 'version': {
-                    'cuda': nv.nvmlSystemGetCudaDriverVersion(),
-                    'driver': nv.nvmlSystemGetDriverVersion(),
-                    'vbios': nv.nvmlDeviceGetVbiosVersion(dev),
-                    'rom': nv.nvmlDeviceGetInforomImageVersion(dev),
-                    'capabilities': nv.nvmlDeviceGetCudaComputeCapability(dev),
+                    'cuda': pynvml.nvmlSystemGetCudaDriverVersion(),
+                    'driver': pynvml.nvmlSystemGetDriverVersion(),
+                    'vbios': pynvml.nvmlDeviceGetVbiosVersion(dev),
+                    'rom': pynvml.nvmlDeviceGetInforomImageVersion(dev),
+                    'capabilities': pynvml.nvmlDeviceGetCudaComputeCapability(dev),
                 },
                 'pci': {
-                    'link': nv.nvmlDeviceGetCurrPcieLinkGeneration(dev),
-                    'width': nv.nvmlDeviceGetCurrPcieLinkWidth(dev),
-                    'busid': nv.nvmlDeviceGetPciInfo(dev).busId,
-                    'deviceid': nv.nvmlDeviceGetPciInfo(dev).pciDeviceId,
+                    'link': pynvml.nvmlDeviceGetCurrPcieLinkGeneration(dev),
+                    'width': pynvml.nvmlDeviceGetCurrPcieLinkWidth(dev),
+                    'busid': pynvml.nvmlDeviceGetPciInfo(dev).busId,
+                    'deviceid': pynvml.nvmlDeviceGetPciInfo(dev).pciDeviceId,
                 },
                 'memory': {
-                    'total': round(nv.nvmlDeviceGetMemoryInfo(dev).total/1024/1024, 2),
-                    'free': round(nv.nvmlDeviceGetMemoryInfo(dev).free/1024/1024,2),
-                    'used': round(nv.nvmlDeviceGetMemoryInfo(dev).used/1024/1024,2),
+                    'total': round(pynvml.nvmlDeviceGetMemoryInfo(dev).total/1024/1024, 2),
+                    'free': round(pynvml.nvmlDeviceGetMemoryInfo(dev).free/1024/1024,2),
+                    'used': round(pynvml.nvmlDeviceGetMemoryInfo(dev).used/1024/1024,2),
                 },
                 'clock': { # gpu, sm, memory
-                    'gpu': [nv.nvmlDeviceGetClockInfo(dev, 0), nv.nvmlDeviceGetMaxClockInfo(dev, 0)],
-                    'sm': [nv.nvmlDeviceGetClockInfo(dev, 1), nv.nvmlDeviceGetMaxClockInfo(dev, 1)],
-                    'memory': [nv.nvmlDeviceGetClockInfo(dev, 2), nv.nvmlDeviceGetMaxClockInfo(dev, 2)],
+                    'gpu': [pynvml.nvmlDeviceGetClockInfo(dev, 0), pynvml.nvmlDeviceGetMaxClockInfo(dev, 0)],
+                    'sm': [pynvml.nvmlDeviceGetClockInfo(dev, 1), pynvml.nvmlDeviceGetMaxClockInfo(dev, 1)],
+                    'memory': [pynvml.nvmlDeviceGetClockInfo(dev, 2), pynvml.nvmlDeviceGetMaxClockInfo(dev, 2)],
                 },
                 'load': {
-                    'gpu': round(nv.nvmlDeviceGetUtilizationRates(dev).gpu),
-                    'memory': round(nv.nvmlDeviceGetUtilizationRates(dev).memory),
-                    'temp': nv.nvmlDeviceGetTemperature(dev, 0),
-                    'fan': nv.nvmlDeviceGetFanSpeed(dev),
+                    'gpu': round(pynvml.nvmlDeviceGetUtilizationRates(dev).gpu),
+                    'memory': round(pynvml.nvmlDeviceGetUtilizationRates(dev).memory),
+                    'temp': pynvml.nvmlDeviceGetTemperature(dev, 0),
+                    'fan': pynvml.nvmlDeviceGetFanSpeed(dev),
                 },
-                'power': [round(nv.nvmlDeviceGetPowerUsage(dev)/1000, 2), round(nv.nvmlDeviceGetEnforcedPowerLimit(dev)/1000, 2)],
-                'state': get_reason(nv.nvmlDeviceGetCurrentClocksThrottleReasons(dev)),
+                'power': [round(pynvml.nvmlDeviceGetPowerUsage(dev)/1000, 2), round(pynvml.nvmlDeviceGetEnforcedPowerLimit(dev)/1000, 2)],
+                'state': get_reason(pynvml.nvmlDeviceGetCurrentClocksThrottleReasons(dev)),
             }
             devices.append(device)
         # log.debug(f'nmvl: {devices}')
         return devices
-    except Exception:
-        # log.debug(f'nvml failed: {e}')
-        nvml_ok = False
+    except Exception as e:
+        log.error(f'NVML: {e}')
         return []
-
-
-def nvml_api(app: FastAPI):
-    app.add_api_route("/sdapi/v1/nvml", get_nvml, methods=["GET"], response_model=List[NVMLRes])

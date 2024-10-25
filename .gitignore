@@ -17,6 +17,7 @@ package-lock.json
 venv
 .history
 **/.DS_Store
+tunableop_results*.csv
 
 # all models and temp files
 *.log
@@ -31,6 +32,7 @@ venv
 *.lock
 *.zip
 *.rar
+*.7z
 *.pyc
 /*.bat
 /*.sh
@@ -56,6 +58,8 @@ venv
 .vscode/
 .idea/
 /localizations
+
+.*/
 
 # force included
 !/models/VAE-approx

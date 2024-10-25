@@ -12,6 +12,7 @@ class State:
     job = ""
     job_no = 0
     job_count = 0
+    frame_count = 0
     total_jobs = 0
     job_timestamp = '0'
     sampling_step = 0
@@ -21,6 +22,7 @@ class State:
     current_image_sampling_step = 0
     id_live_preview = 0
     textinfo = None
+    api = False
     time_start = None
     need_restart = False
     server_start = time.time()
@@ -40,10 +42,12 @@ class State:
         log.debug(f'Requested {"pause" if self.paused else "continue"}')
 
     def nextjob(self):
+        import modules.devices
         self.do_set_current_image()
         self.job_no += 1
         self.sampling_step = 0
         self.current_image_sampling_step = 0
+        modules.devices.torch_gc()
 
     def dict(self):
         obj = {
@@ -58,7 +62,7 @@ class State:
         }
         return obj
 
-    def begin(self, title=""):
+    def begin(self, title="", api=None):
         import modules.devices
         self.total_jobs += 1
         self.current_image = None
@@ -68,44 +72,49 @@ class State:
         self.interrupted = False
         self.job = title
         self.job_count = -1
+        self.frame_count = -1
         self.job_no = 0
         self.job_timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         self.paused = False
         self.sampling_step = 0
         self.skipped = False
         self.textinfo = None
+        self.api = api if api is not None else self.api
         self.time_start = time.time()
         if self.debug_output:
             log.debug(f'State begin: {self.job}')
         modules.devices.torch_gc()
 
-    def end(self):
+    def end(self, api=None):
         import modules.devices
         if self.time_start is None: # someone called end before being
-            log.debug(f'Access state.end: {sys._getframe().f_back.f_code.co_name}') # pylint: disable=protected-access
+            fn = f'{sys._getframe(2).f_code.co_name}:{sys._getframe(1).f_code.co_name}' # pylint: disable=protected-access
+            log.debug(f'Access state.end: {fn}') # pylint: disable=protected-access
             self.time_start = time.time()
         if self.debug_output:
             log.debug(f'State end: {self.job} time={time.time() - self.time_start:.2f}')
         self.job = ""
         self.job_count = 0
         self.job_no = 0
+        self.frame_count = 0
         self.paused = False
         self.interrupted = False
         self.skipped = False
+        self.api = api if api is not None else self.api
         modules.devices.torch_gc()
 
     def set_current_image(self):
         from modules.shared import opts, cmd_opts
         """sets self.current_image from self.current_latent if enough sampling steps have been made after the last call to this"""
-        if cmd_opts.lowvram:
+        if cmd_opts.lowvram or self.api:
             return
         if abs(self.sampling_step - self.current_image_sampling_step) >= opts.show_progress_every_n_steps and opts.live_previews_enable and opts.show_progress_every_n_steps > 0:
             self.do_set_current_image()
 
     def do_set_current_image(self):
-        from modules.shared import opts
         if self.current_latent is None:
             return
+        from modules.shared import opts
         import modules.sd_samplers # pylint: disable=W0621
         try:
             image = modules.sd_samplers.samples_to_image_grid(self.current_latent) if opts.show_progress_grid else modules.sd_samplers.sample_to_image(self.current_latent)

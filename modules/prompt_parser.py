@@ -14,7 +14,7 @@ from typing import List
 import lark
 import torch
 from compel import Compel
-from modules.shared import opts, log, backend, Backend
+from modules.shared import opts, log, native
 
 # a prompt like this: "fantasy landscape with a [mountain:lake:0.25] and [an oak:a christmas tree:0.75][ in foreground::0.6][ in background:0.25] [shoddy:masterful:0.5]"
 # will be represented with prompt_schedule like this (assuming steps=100):
@@ -70,7 +70,8 @@ re_attention_v1 = re.compile(r"""
 
 
 debug_output = os.environ.get('SD_PROMPT_DEBUG', None)
-debug = log.info if debug_output is not None else lambda *args, **kwargs: None
+debug = log.trace if debug_output is not None else lambda *args, **kwargs: None
+debug('Trace: PROMPT')
 
 
 def get_learned_conditioning_prompt_schedules(prompts, steps):
@@ -120,9 +121,15 @@ def get_learned_conditioning_prompt_schedules(prompts, steps):
         class AtStep(lark.Transformer):
             def scheduled(self, args):
                 before, after, _, when = args
-                yield before or () if step <= when else after
+                try:
+                    yield before or () if step <= when else after
+                except StopIteration:
+                    yield ''
             def alternate(self, args):
-                yield next(args[(step - 1)%len(args)]) # pylint: disable=stop-iteration-return
+                try:
+                    yield next(args[(step - 1) % len(args)]) # pylint: disable=stop-iteration-return
+                except StopIteration:
+                    yield ''
             def start(self, args):
                 def flatten(x):
                     if type(x) == str:
@@ -134,8 +141,7 @@ def get_learned_conditioning_prompt_schedules(prompts, steps):
             def plain(self, args):
                 yield args[0].value
             def __default__(self, data, children, meta):
-                for child in children:
-                    yield child
+                yield from children
         return AtStep().transform(tree)
 
     def get_schedule(prompt):
@@ -272,10 +278,10 @@ def parse_prompt_attention(text):
       (abc) - increases attention to abc by a multiplier of 1.1
       (abc:3.12) - increases attention to abc by a multiplier of 3.12
       [abc] - decreases attention to abc by a multiplier of 1.1
-      \( - literal character '('
-      \[ - literal character '['
-      \) - literal character ')'
-      \] - literal character ']'
+      ( - literal character '('
+      [ - literal character '['
+      ) - literal character ')'
+      ] - literal character ']'
       \\ - literal character '\'
       anything else - just text
     >>> parse_prompt_attention('normal text')
@@ -284,7 +290,7 @@ def parse_prompt_attention(text):
     [['an ', 1.0], ['important', 1.1], [' word', 1.0]]
     >>> parse_prompt_attention('(unbalanced')
     [['unbalanced', 1.1]]
-    >>> parse_prompt_attention('\(literal\]')
+    >>> parse_prompt_attention('(literal]')
     [['(literal]', 1.0]]
     >>> parse_prompt_attention('(unnecessary)(parens)')
     [['unnecessaryparens', 1.1]]
@@ -304,7 +310,7 @@ def parse_prompt_attention(text):
     square_brackets = []
     if opts.prompt_attention == 'Fixed attention':
         res = [[text, 1.0]]
-        debug(f'Prompt: parser={opts.prompt_attention} {res}')
+        debug(f'Prompt: parser="{opts.prompt_attention}" {res}')
         return res
     elif opts.prompt_attention == 'Compel parser':
         conjunction = Compel.parse_prompt_string(text)
@@ -313,14 +319,14 @@ def parse_prompt_attention(text):
         res = []
         for frag in conjunction.prompts[0].children:
             res.append([frag.text, frag.weight])
-        debug(f'Prompt: parser={opts.prompt_attention} {res}')
+        debug(f'Prompt: parser="{opts.prompt_attention}" {res}')
         return res
     elif opts.prompt_attention == 'A1111 parser':
         re_attention = re_attention_v1
         whitespace = ''
     else:
         re_attention = re_attention_v1
-        if backend == Backend.DIFFUSERS:
+        if native:
             text = text.replace('\n', ' BREAK ')
         else:
             text = text.replace('\n', ' ')
@@ -376,25 +382,25 @@ def parse_prompt_attention(text):
             res.pop(i + 1)
         else:
             i += 1
-    debug(f'Prompt: parser={opts.prompt_attention} {res}')
+    debug(f'Prompt: parser="{opts.prompt_attention}" {res}')
     return res
 
 if __name__ == "__main__":
     input_text = '[black] [[grey]] (white) ((gray)) ((orange:1.1) yellow) ((purple) and [dark] red:1.1) [mouse:0.2] [(cat:1.1):0.5]'
-    print(f'Prompt: {input_text}')
+    log.info(f'Prompt: {input_text}')
     all_schedules = get_learned_conditioning_prompt_schedules([input_text], 100)[0]
-    print('Schedules', all_schedules)
+    log.info(f'Schedules: {all_schedules}')
     for schedule in all_schedules:
-        print('Schedule', schedule[0])
+        log.info(f'Schedule: {schedule[0]}')
         opts.data['prompt_attention'] = 'Fixed attention'
         output_list = parse_prompt_attention(schedule[1])
-        print('  Fixed:', output_list)
+        log.info(f'  Fixed: {output_list}')
         opts.data['prompt_attention'] = 'Compel parser'
         output_list = parse_prompt_attention(schedule[1])
-        print('  Compel:', output_list)
+        log.info(f'  Compel: {output_list}')
         opts.data['prompt_attention'] = 'A1111 parser'
         output_list = parse_prompt_attention(schedule[1])
-        print('  A1111:', output_list)
+        log.info(f'  A1111: {output_list}')
         opts.data['prompt_attention'] = 'Full parser'
-        output_list = parse_prompt_attention(schedule[1])
-        print('  Full :', output_list)
+        log.info = parse_prompt_attention(schedule[1])
+        log.info(f'  Full:  {output_list}')

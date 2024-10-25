@@ -23,15 +23,11 @@ def setup_for_low_vram(sd_model, use_medvram):
         be in CPU
         """
         global module_in_gpu # pylint: disable=global-statement
-
         module = parents.get(module, module)
-
         if module_in_gpu == module:
             return
-
         if module_in_gpu is not None:
             module_in_gpu.to(cpu)
-
         module.to(devices.device)
         module_in_gpu = module
 
@@ -52,7 +48,7 @@ def setup_for_low_vram(sd_model, use_medvram):
         return first_stage_model_decode(z)
 
     # for SD1, cond_stage_model is CLIP and its NN is in the tranformer frield, but for SD2, it's open clip, and it's in model field
-    if hasattr(sd_model.cond_stage_model, 'model'):
+    if hasattr(sd_model, 'cond_stage_model') and hasattr(sd_model.cond_stage_model, 'model'):
         sd_model.cond_stage_model.transformer = sd_model.cond_stage_model.model
 
     # remove several big modules: cond, first_stage, depth/embedder (if applicable), and unet from the model and then
@@ -73,7 +69,7 @@ def setup_for_low_vram(sd_model, use_medvram):
         sd_model.embedder.register_forward_pre_hook(send_me_to_gpu)
     parents[sd_model.cond_stage_model.transformer] = sd_model.cond_stage_model
 
-    if hasattr(sd_model.cond_stage_model, 'model'):
+    if hasattr(sd_model, 'cond_stage_model') and hasattr(sd_model.cond_stage_model, 'model'):
         sd_model.cond_stage_model.model = sd_model.cond_stage_model.transformer
         del sd_model.cond_stage_model.transformer
 

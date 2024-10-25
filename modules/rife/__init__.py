@@ -11,12 +11,12 @@ from PIL import Image
 from torch.nn import functional as F
 from tqdm.rich import tqdm
 from modules.rife.ssim import ssim_matlab
-from modules.rife.model_rife import Model
+from modules.rife.model_rife import RifeModel
 from modules import devices, shared
 
 
 model_url = 'https://github.com/vladmandic/rife/raw/main/model/flownet-v46.pkl'
-model = None
+model: RifeModel = None
 
 
 def load(model_path: str = 'rife/flownet-v46.pkl'):
@@ -26,7 +26,7 @@ def load(model_path: str = 'rife/flownet-v46.pkl'):
         model_dir = os.path.join(shared.models_path, 'RIFE')
         model_path = modelloader.load_file_from_url(url=model_url, model_dir=model_dir, file_name='flownet-v46.pkl')
         shared.log.debug(f'RIFE load model: file="{model_path}"')
-        model = Model()
+        model = RifeModel()
         model.load_model(model_path, -1)
         model.eval()
         model.device()
@@ -113,5 +113,5 @@ def interpolate(images: list, count: int = 2, scale: float = 1.0, pad: int = 1, 
     while not buffer.empty():
         time.sleep(0.1)
     t1 = time.time()
-    shared.log.info(f'RIFE interpolate: input={len(images)} frames={len(interpolated)} resolution={w}x{h} interpolate={count} scale={scale} pad={pad} change={change} time={round(t1 - t0, 2)}')
+    shared.log.info(f'RIFE interpolate: input={len(images)} frames={len(interpolated)} width={w} height={h} interpolate={count} scale={scale} pad={pad} change={change} time={round(t1 - t0, 2)}')
     return interpolated

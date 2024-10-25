@@ -6,7 +6,7 @@ const localeData = {
   el: null,
 };
 
-function tooltipCreate() {
+async function tooltipCreate() {
   localeData.el = document.createElement('div');
   localeData.el.className = 'tooltip';
   localeData.el.id = 'tooltip-container';
@@ -21,6 +21,11 @@ async function tooltipShow(e) {
   if (e.target.dataset.hint) {
     localeData.el.classList.add('tooltip-show');
     localeData.el.innerHTML = `<b>${e.target.textContent}</b><br>${e.target.dataset.hint}`;
+    if (e.clientX > window.innerWidth / 2) {
+      localeData.el.classList.add('tooltip-left');
+    } else {
+      localeData.el.classList.remove('tooltip-left');
+    }
   }
 }
 
@@ -39,6 +44,25 @@ async function validateHints(elements, data) {
   log('missing in locale:', missingLocale);
   const missingUI = current.filter((e) => !original.includes(e));
   log('in locale but not ui:', missingUI);
+}
+
+async function replaceButtonText(el) {
+  // https://www.nerdfonts.com/cheat-sheet
+  // use unicode of icon with format nf-md-<icon>_circle
+  const textIcons = {
+    Generate: '\uf144',
+    Enqueue: '\udb81\udc17',
+    Stop: '\udb81\ude66',
+    Skip: '\udb81\ude61',
+    Pause: '\udb80\udfe5',
+    Restore: '\udb82\udd9b',
+    Clear: '\udb80\udd59',
+    Networks: '\uf261',
+  };
+  if (textIcons[el.innerText]) {
+    el.classList.add('button-icon');
+    el.innerText = textIcons[el.innerText];
+  }
 }
 
 async function setHints() {
@@ -66,6 +90,7 @@ async function setHints() {
       localized++;
       el.textContent = found.localized;
     }
+    // replaceButtonText(el);
     if (found?.hint?.length > 0) {
       hints++;
       if (localeData.type === 1) {
@@ -82,11 +107,12 @@ async function setHints() {
   const t1 = performance.now();
   log('setHints', { type: localeData.type, elements: elements.length, localized, hints, data: localeData.data.length, time: t1 - t0 });
   // sortUIElements();
-  removeSplash();
   // validateHints(elements, localeData.data);
 }
 
+/*
 onAfterUiUpdate(async () => {
   if (localeData.timeout) clearTimeout(localeData.timeout);
   localeData.timeout = setTimeout(setHints, 250);
 });
+*/

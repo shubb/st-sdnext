@@ -1,9 +1,8 @@
 import os
-import collections
 import glob
 from copy import deepcopy
 import torch
-from modules import shared, paths, devices, script_callbacks, sd_models
+from modules import shared, errors, paths, devices, script_callbacks, sd_models
 
 
 vae_ignore_keys = {"model_ema.decay", "model_ema.num_updates"}
@@ -12,7 +11,7 @@ base_vae = None
 loaded_vae_file = None
 checkpoint_info = None
 vae_path = os.path.abspath(os.path.join(paths.models_path, 'VAE'))
-checkpoints_loaded = collections.OrderedDict()
+debug = os.environ.get('SD_LOAD_DEBUG', None) is not None
 
 
 def get_base_vae(model):
@@ -56,7 +55,7 @@ def refresh_vae_list():
     vae_path = shared.opts.vae_dir
     vae_dict.clear()
     vae_paths = []
-    if shared.backend == shared.Backend.ORIGINAL:
+    if not shared.native:
         if sd_models.model_path is not None and os.path.isdir(sd_models.model_path):
             vae_paths += [
                 os.path.join(sd_models.model_path, 'VAE', '**/*.vae.ckpt'),
@@ -75,7 +74,7 @@ def refresh_vae_list():
                 os.path.join(shared.opts.vae_dir, '**/*.pt'),
                 os.path.join(shared.opts.vae_dir, '**/*.safetensors'),
             ]
-    elif shared.backend == shared.Backend.DIFFUSERS:
+    elif shared.native:
         if sd_models.model_path is not None and os.path.isdir(sd_models.model_path):
             vae_paths += [os.path.join(sd_models.model_path, 'VAE', '**/*.vae.safetensors')]
         if shared.opts.ckpt_dir is not None and os.path.isdir(shared.opts.ckpt_dir):
@@ -89,11 +88,12 @@ def refresh_vae_list():
     candidates = []
     for path in vae_paths:
         candidates += glob.iglob(path, recursive=True)
+    candidates = [os.path.abspath(path) for path in candidates]
     for filepath in candidates:
         name = get_filename(filepath)
         if name == 'VAE':
             continue
-        if shared.backend == shared.Backend.ORIGINAL:
+        if not shared.native:
             vae_dict[name] = filepath
         else:
             if filepath.endswith(".json"):
@@ -138,36 +138,26 @@ def resolve_vae(checkpoint_file):
 
 
 def load_vae_dict(filename):
-    vae_ckpt = sd_models.read_state_dict(filename)
+    vae_ckpt = sd_models.read_state_dict(filename, what='vae')
     vae_dict_1 = {k: v for k, v in vae_ckpt.items() if k[0:4] != "loss" and k not in vae_ignore_keys}
     return vae_dict_1
 
 
 def load_vae(model, vae_file=None, vae_source="unknown-source"):
     global loaded_vae_file # pylint: disable=global-statement
-    cache_enabled = shared.opts.sd_vae_checkpoint_cache > 0
     if vae_file:
-        if cache_enabled and vae_file in checkpoints_loaded:
-            # use vae checkpoint cache
-            shared.log.info(f"Loading VAE: model={get_filename(vae_file)} source={vae_source} cached=True")
-            store_base_vae(model)
-            _load_vae_dict(model, checkpoints_loaded[vae_file])
-        else:
+        try:
             if not os.path.isfile(vae_file):
                 shared.log.error(f"VAE not found: model={vae_file} source={vae_source}")
                 return
             store_base_vae(model)
             vae_dict_1 = load_vae_dict(vae_file)
             _load_vae_dict(model, vae_dict_1)
-            if cache_enabled:
-                # cache newly loaded vae
-                checkpoints_loaded[vae_file] = vae_dict_1.copy()
-        # clean up cache if limit is reached
-        if cache_enabled:
-            while len(checkpoints_loaded) > shared.opts.sd_vae_checkpoint_cache + 1: # we need to count the current model
-                checkpoints_loaded.popitem(last=False)  # LRU
-        # If vae used is not in dict, update it
-        # It will be removed on refresh though
+        except Exception as e:
+            shared.log.error(f"Load VAE failed: model={vae_file} source={vae_source} {e}")
+            if debug:
+                errors.display(e, 'VAE')
+            restore_base_vae(model)
         vae_opt = get_filename(vae_file)
         if vae_opt not in vae_dict:
             vae_dict[vae_opt] = vae_file
@@ -176,13 +166,32 @@ def load_vae(model, vae_file=None, vae_source="unknown-source"):
     loaded_vae_file = vae_file
 
 
+def apply_vae_config(model_file, vae_file, sd_model):
+    def get_vae_config():
+        config_file = os.path.join(paths.sd_configs_path, os.path.splitext(os.path.basename(model_file))[0] + '_vae.json')
+        if config_file is not None and os.path.exists(config_file):
+            return shared.readfile(config_file)
+        config_file = os.path.join(paths.sd_configs_path, os.path.splitext(os.path.basename(vae_file))[0] + '.json') if vae_file else None
+        if config_file is not None and os.path.exists(config_file):
+            return shared.readfile(config_file)
+        config_file = os.path.join(paths.sd_configs_path, shared.sd_model_type, 'vae', 'config.json')
+        if config_file is not None and os.path.exists(config_file):
+            return shared.readfile(config_file)
+        return {}
+
+    if hasattr(sd_model, 'vae') and hasattr(sd_model.vae, 'config'):
+        config = get_vae_config()
+        for k, v in config.items():
+            if k in sd_model.vae.config and not k.startswith('_'):
+                sd_model.vae.config[k] = v
+
+
 def load_vae_diffusers(model_file, vae_file=None, vae_source="unknown-source"):
     if vae_file is None:
         return None
     if not os.path.exists(vae_file):
         shared.log.error(f'VAE not found: model{vae_file}')
         return None
-    shared.log.info(f"Loading VAE: model={vae_file} source={vae_source}")
     diffusers_load_config = {
         "low_cpu_mem_usage": False,
         "torch_dtype": devices.dtype_vae,
@@ -197,16 +206,23 @@ def load_vae_diffusers(model_file, vae_file=None, vae_source="unknown-source"):
         diffusers_load_config['variant'] = shared.opts.diffusers_vae_load_variant
     if shared.opts.diffusers_vae_upcast != 'default':
         diffusers_load_config['force_upcast'] = True if shared.opts.diffusers_vae_upcast == 'true' else False
-    shared.log.debug(f'Diffusers VAE load config: {diffusers_load_config}')
+    _pipeline, model_type = sd_models.detect_pipeline(model_file, 'vae')
+    vae_config = sd_models.get_load_config(model_file, model_type, config_type='json')
+    if vae_config is not None:
+        diffusers_load_config['config'] = os.path.join(vae_config, 'vae')
+    shared.log.info(f'Load module: type=VAE model="{vae_file}" source={vae_source} config={diffusers_load_config}')
     try:
         import diffusers
         if os.path.isfile(vae_file):
-            _pipeline, model_type = sd_models.detect_pipeline(model_file, 'vae')
-            diffusers_load_config = { "config_file":  paths.sd_default_config if model_type != 'Stable Diffusion XL' else os.path.join(paths.sd_configs_path, 'sd_xl_base.yaml')}
-            if os.path.getsize(vae_file) > 1310944880:
+            if os.path.getsize(vae_file) > 1310944880: # 1.3GB
                 vae = diffusers.ConsistencyDecoderVAE.from_pretrained('openai/consistency-decoder', **diffusers_load_config) # consistency decoder does not have from single file, so we'll just download it once more
+            elif os.path.getsize(vae_file) < 10000000: # 10MB
+                vae = diffusers.AutoencoderTiny.from_single_file(vae_file, **diffusers_load_config)
             else:
                 vae = diffusers.AutoencoderKL.from_single_file(vae_file, **diffusers_load_config)
+                if getattr(vae.config, 'scaling_factor', 0) == 0.18125 and shared.sd_model_type == 'sdxl':
+                    vae.config.scaling_factor = 0.13025
+                    shared.log.debug('Diffusers VAE: fix scaling factor')
             vae = vae.to(devices.dtype_vae)
         else:
             if 'consistency-decoder' in vae_file:
@@ -216,9 +232,13 @@ def load_vae_diffusers(model_file, vae_file=None, vae_source="unknown-source"):
         global loaded_vae_file # pylint: disable=global-statement
         loaded_vae_file = os.path.basename(vae_file)
         # shared.log.debug(f'Diffusers VAE config: {vae.config}')
+        if shared.opts.diffusers_offload_mode == 'none':
+            sd_models.move_model(vae, devices.device)
         return vae
     except Exception as e:
-        shared.log.error(f"Loading VAE failed: model={vae_file} {e}")
+        shared.log.error(f"Load VAE failed: model={vae_file} {e}")
+        if debug:
+            errors.display(e, 'VAE')
     return None
 
 
@@ -249,15 +269,17 @@ def reload_vae_weights(sd_model=None, vae_file=unspecified):
         vae_file, vae_source = resolve_vae(checkpoint_file)
     else:
         vae_source = "function-argument"
+    if vae_file is None or vae_file == 'None':
+        if hasattr(sd_model, 'original_vae'):
+            sd_models.set_diffuser_options(sd_model, vae=sd_model.original_vae, op='vae')
+            shared.log.info("VAE restored")
+            return None
     if loaded_vae_file == vae_file:
         return None
-    if not getattr(sd_model, 'has_accelerate', False):
-        if shared.cmd_opts.lowvram or shared.cmd_opts.medvram:
-            lowvram.send_everything_to_cpu()
-        else:
-            sd_model.to(devices.cpu)
+    if not shared.native and (shared.cmd_opts.lowvram or shared.cmd_opts.medvram):
+        lowvram.send_everything_to_cpu()
 
-    if shared.backend == shared.Backend.ORIGINAL:
+    if not shared.native:
         sd_hijack.model_hijack.undo_hijack(sd_model)
         if shared.cmd_opts.rollback_vae and devices.dtype_vae == torch.bfloat16:
             devices.dtype_vae = torch.float16
@@ -267,12 +289,15 @@ def reload_vae_weights(sd_model=None, vae_file=unspecified):
         if vae_file is not None:
             shared.log.info(f"VAE weights loaded: {vae_file}")
     else:
-        if hasattr(shared.sd_model, "vae") and hasattr(shared.sd_model, "sd_checkpoint_info"):
-            vae = load_vae_diffusers(shared.sd_model.sd_checkpoint_info.filename, vae_file, vae_source)
+        if hasattr(sd_model, "vae") and hasattr(sd_model, "sd_checkpoint_info"):
+            vae = load_vae_diffusers(sd_model.sd_checkpoint_info.filename, vae_file, vae_source)
             if vae is not None:
-                if vae is not None:
-                    sd_model.vae = vae
+                if not hasattr(sd_model, 'original_vae'):
+                    sd_model.original_vae = sd_model.vae
+                    sd_models.move_model(sd_model.original_vae, devices.cpu)
+                sd_models.set_diffuser_options(sd_model, vae=vae, op='vae')
+                apply_vae_config(sd_model.sd_checkpoint_info.filename, vae_file, sd_model)
 
-    if not shared.cmd_opts.lowvram and not shared.cmd_opts.medvram and not getattr(sd_model, 'has_accelerate', False):
-        sd_model.to(devices.device)
+    if not shared.cmd_opts.lowvram and not shared.cmd_opts.medvram:
+        sd_models.move_model(sd_model, devices.device)
     return sd_model

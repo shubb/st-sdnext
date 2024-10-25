@@ -7,6 +7,8 @@ let img2img_textarea;
 const wait_time = 800;
 const token_timeouts = {};
 let uiLoaded = false;
+let promptsInitialized = false;
+window.args_to_array = Array.from; // Compatibility with e.g. extensions that may expect this to be around
 
 function rememberGallerySelection(name) {
   // dummy
@@ -31,7 +33,8 @@ function clip_gallery_urls(gallery) {
 }
 
 function all_gallery_buttons() {
-  const allGalleryButtons = gradioApp().querySelectorAll('[style="display: block;"].tabitem div[id$=_gallery].gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small');
+  let allGalleryButtons = gradioApp().querySelectorAll('[style="display: block;"].tabitem div[id$=_gallery].gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small');
+  if (allGalleryButtons.length === 0) allGalleryButtons = gradioApp().querySelectorAll('.gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small');
   const visibleGalleryButtons = [];
   allGalleryButtons.forEach((elem) => {
     if (elem.parentElement.offsetParent) visibleGalleryButtons.push(elem);
@@ -40,7 +43,8 @@ function all_gallery_buttons() {
 }
 
 function selected_gallery_button() {
-  const allCurrentButtons = gradioApp().querySelectorAll('[style="display: block;"].tabitem div[id$=_gallery].gradio-gallery .thumbnail-item.thumbnail-small.selected');
+  let allCurrentButtons = gradioApp().querySelectorAll('[style="display: block;"].tabitem div[id$=_gallery].gradio-gallery .thumbnail-item.thumbnail-small.selected');
+  if (allCurrentButtons.length === 0) allCurrentButtons = gradioApp().querySelectorAll('.gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small.selected');
   let visibleCurrentButton = null;
   allCurrentButtons.forEach((elem) => {
     if (elem.parentElement.offsetParent) visibleCurrentButton = elem;
@@ -64,40 +68,90 @@ function extract_image_from_gallery(gallery) {
   return [gallery[index]];
 }
 
-window.args_to_array = Array.from; // Compatibility with e.g. extensions that may expect this to be around
+async function setTheme(val, old) {
+  if (!old || val === old) return;
+  old = old.replace('modern/', '');
+  val = val.replace('modern/', '');
+  const links = Array.from(document.getElementsByTagName('link')).filter((l) => l.href.includes(old));
+  if (links.length === 0) {
+    log('setTheme: current theme not matched', old);
+    return;
+  }
+  for (const link of links) {
+    const href = link.href.replace(old, val);
+    const res = await fetch(href);
+    if (res.ok) {
+      log('setTheme:', old, val);
+      link.href = link.href.replace(old, val);
+    } else {
+      log('setTheme: CSS not found', val);
+    }
+  }
+}
+
+function setFontSize(val, old) {
+  const size = val || opts.font_size;
+  if (size === old) return;
+  document.documentElement.style.setProperty('--font-size', `${size}px`);
+  gradioApp().style.setProperty('--font-size', `${size}px`);
+  gradioApp().style.setProperty('--text-xxs', `${size - 3}px`);
+  gradioApp().style.setProperty('--text-xs', `${size - 2}px`);
+  gradioApp().style.setProperty('--text-sm', `${size - 1}px`);
+  gradioApp().style.setProperty('--text-md', `${size}px`);
+  gradioApp().style.setProperty('--text-lg', `${size + 1}px`);
+  gradioApp().style.setProperty('--text-xl', `${size + 2}px`);
+  gradioApp().style.setProperty('--text-xxl', `${size + 3}px`);
+  log('setFontSize', size);
+}
+
+function switchToTab(tab) {
+  const tabs = Array.from(gradioApp().querySelectorAll('#tabs > .tab-nav > button'));
+  const btn = tabs?.find((t) => t.innerText === tab);
+  log('switchToTab', tab);
+  if (btn) btn.click();
+}
 
 function switch_to_txt2img(...args) {
-  gradioApp().querySelector('#tabs').querySelectorAll('button')[0].click();
+  switchToTab('Text');
   return Array.from(arguments);
 }
 
 function switch_to_img2img_tab(no) {
-  gradioApp().querySelector('#tabs').querySelectorAll('button')[1].click();
+  switchToTab('Image');
   gradioApp().getElementById('mode_img2img').querySelectorAll('button')[no].click();
 }
 
 function switch_to_img2img(...args) {
+  switchToTab('Image');
   switch_to_img2img_tab(0);
   return Array.from(arguments);
 }
 
 function switch_to_sketch(...args) {
+  switchToTab('Image');
   switch_to_img2img_tab(1);
   return Array.from(arguments);
 }
 
 function switch_to_inpaint(...args) {
+  switchToTab('Image');
   switch_to_img2img_tab(2);
   return Array.from(arguments);
 }
 
 function switch_to_inpaint_sketch(...args) {
+  switchToTab('Image');
   switch_to_img2img_tab(3);
   return Array.from(arguments);
 }
 
 function switch_to_extras(...args) {
-  gradioApp().querySelector('#tabs').querySelectorAll('button')[2].click();
+  switchToTab('Process');
+  return Array.from(arguments);
+}
+
+function switch_to_control(...args) {
+  switchToTab('Control');
   return Array.from(arguments);
 }
 
@@ -150,6 +204,8 @@ function submit_txt2img(...args) {
   requestProgress(id, null, gradioApp().getElementById('txt2img_gallery'));
   const res = create_submit_args(args);
   res[0] = id;
+  res[1] = window.submit_state;
+  window.submit_state = '';
   return res;
 }
 
@@ -160,7 +216,22 @@ function submit_img2img(...args) {
   requestProgress(id, null, gradioApp().getElementById('img2img_gallery'));
   const res = create_submit_args(args);
   res[0] = id;
-  res[1] = get_tab_index('mode_img2img');
+  res[1] = window.submit_state;
+  res[2] = get_tab_index('mode_img2img');
+  window.submit_state = '';
+  return res;
+}
+
+function submit_control(...args) {
+  log('submitControl');
+  clearGallery('control');
+  const id = randomId();
+  requestProgress(id, null, gradioApp().getElementById('control_gallery'));
+  const res = create_submit_args(args);
+  res[0] = id;
+  res[1] = window.submit_state;
+  res[2] = gradioApp().querySelector('#control-tabs > .tab-nav > .selected')?.innerText.toLowerCase() || ''; // selected tab name
+  window.submit_state = '';
   return res;
 }
 
@@ -171,6 +242,7 @@ function submit_postprocessing(...args) {
 }
 
 window.submit = submit_txt2img;
+window.submit_state = '';
 
 function modelmerger(...args) {
   const id = randomId();
@@ -185,11 +257,11 @@ function clearPrompts(prompt, negative_prompt) {
   return [prompt, negative_prompt];
 }
 
-const promptTokecountUpdateFuncs = {};
+const promptTokenCountUpdateFuncs = {};
 
 function recalculatePromptTokens(name) {
-  if (promptTokecountUpdateFuncs[name]) {
-    promptTokecountUpdateFuncs[name]();
+  if (promptTokenCountUpdateFuncs[name]) {
+    promptTokenCountUpdateFuncs[name]();
   }
 }
 
@@ -208,6 +280,12 @@ function recalculate_prompts_img2img(...args) {
 function recalculate_prompts_inpaint(...args) {
   recalculatePromptTokens('img2img_prompt');
   recalculatePromptTokens('img2img_neg_prompt');
+  return Array.from(arguments);
+}
+
+function recalculate_prompts_control(...args) {
+  recalculatePromptTokens('control_prompt');
+  recalculatePromptTokens('control_neg_prompt');
   return Array.from(arguments);
 }
 
@@ -258,8 +336,6 @@ function sortUIElements() {
 }
 
 onAfterUiUpdate(async () => {
-  let promptsInitialized = false;
-
   async function registerTextarea(id, id_counter, id_button) {
     const prompt = gradioApp().getElementById(id);
     if (!prompt) return;
@@ -268,17 +344,20 @@ onAfterUiUpdate(async () => {
     if (counter.parentElement === prompt.parentElement) return;
     prompt.parentElement.insertBefore(counter, prompt);
     prompt.parentElement.style.position = 'relative';
-    promptTokecountUpdateFuncs[id] = () => { update_token_counter(id_button); };
-    localTextarea.addEventListener('input', promptTokecountUpdateFuncs[id]);
-    if (!promptsInitialized) log('initPrompts');
-    promptsInitialized = true;
+    promptTokenCountUpdateFuncs[id] = () => { update_token_counter(id_button); };
+    localTextarea.addEventListener('input', promptTokenCountUpdateFuncs[id]);
   }
 
   // sortUIElements();
+  if (promptsInitialized) return;
+  log('initPrompts');
   registerTextarea('txt2img_prompt', 'txt2img_token_counter', 'txt2img_token_button');
   registerTextarea('txt2img_neg_prompt', 'txt2img_negative_token_counter', 'txt2img_negative_token_button');
   registerTextarea('img2img_prompt', 'img2img_token_counter', 'img2img_token_button');
   registerTextarea('img2img_neg_prompt', 'img2img_negative_token_counter', 'img2img_negative_token_button');
+  registerTextarea('control_prompt', 'control_token_counter', 'control_token_button');
+  registerTextarea('control_neg_prompt', 'control_negative_token_counter', 'control_negative_token_button');
+  promptsInitialized = true;
 });
 
 function update_txt2img_tokens(...args) {
@@ -306,7 +385,7 @@ function monitorServerStatus() {
         <h1>Waiting for server...</h1>
         <script>
           function monitorServerStatus() {
-            fetch('/sdapi/v1/progress')
+            fetch('/sdapi/v1/progress?skip_current_image=true')
               .then((res) => { !res?.ok ? setTimeout(monitorServerStatus, 1000) : location.reload(); })
               .catch((e) => setTimeout(monitorServerStatus, 1000))
           }
@@ -321,7 +400,7 @@ function monitorServerStatus() {
 function restartReload() {
   document.body.style = 'background: #222222; font-size: 1rem; font-family:monospace; margin-top:20%; color:lightgray; text-align:center';
   document.body.innerHTML = '<h1>Server shutdown in progress...</h1>';
-  fetch('/sdapi/v1/progress')
+  fetch('/sdapi/v1/progress?skip_current_image=true')
     .then((res) => setTimeout(restartReload, 1000))
     .catch((e) => setTimeout(monitorServerStatus, 500));
   return [];
@@ -352,17 +431,24 @@ function selectVAE(name) {
 }
 
 function selectReference(name) {
+  log(`Select reference: ${name}`);
   desiredCheckpointName = name;
   gradioApp().getElementById('change_reference').click();
 }
 
-function currentImg2imgSourceResolution(_a, _b, scaleBy) {
+function currentImageResolutionimg2img(_a, _b, scaleBy) {
   const img = gradioApp().querySelector('#mode_img2img > div[style="display: block;"] img');
   return img ? [img.naturalWidth, img.naturalHeight, scaleBy] : [0, 0, scaleBy];
 }
 
+function currentImageResolutioncontrol(_a, _b, scaleBy) {
+  const img = gradioApp().querySelector('#control-tab-input > div[style="display: block;"] img');
+  return img ? [img.naturalWidth, img.naturalHeight, scaleBy] : [0, 0, scaleBy];
+}
+
 function updateImg2imgResizeToTextAfterChangingImage() {
-  setTimeout(() => gradioApp().getElementById('img2img_update_resize_to').click(), 500);
+  const el = gradioApp().getElementById('img2img_update_resize_to');
+  if (el) setTimeout(() => gradioApp().getElementById('img2img_update_resize_to').click(), 500);
   return [];
 }
 
@@ -375,8 +461,9 @@ function createThemeElement() {
   return el;
 }
 
-function toggleCompact(val) {
-  // log('toggleCompact', val);
+function toggleCompact(val, old) {
+  if (val === old) return;
+  log('toggleCompact', val, old);
   if (val) {
     gradioApp().style.setProperty('--layout-gap', 'var(--spacing-md)');
     gradioApp().querySelectorAll('input[type=range]').forEach((el) => el.classList.add('hidden'));
@@ -392,19 +479,23 @@ function toggleCompact(val) {
 
 function previewTheme() {
   let name = gradioApp().getElementById('setting_gradio_theme').querySelectorAll('input')?.[0].value || '';
-  fetch('/file=html/themes.json').then((res) => {
-    res.json().then((themes) => {
-      const theme = themes.find((t) => t.id === name);
-      if (theme) {
-        window.open(theme.subdomain, '_blank');
-      } else {
-        const el = document.getElementById('theme-preview') || createThemeElement();
-        el.style.display = el.style.display === 'block' ? 'none' : 'block';
-        name = name.replace('/', '-');
-        el.src = `/file=html/${name}.jpg`;
-      }
-    });
-  });
+  fetch('/file=html/themes.json')
+    .then((res) => {
+      res.json()
+        .then((themes) => {
+          const theme = Array.isArray(themes) ? themes.find((t) => t.id === name) : null;
+          if (theme) {
+            window.open(theme.subdomain, '_blank');
+          } else {
+            const el = document.getElementById('theme-preview') || createThemeElement();
+            el.style.display = el.style.display === 'block' ? 'none' : 'block';
+            name = name.replace('/', '-');
+            el.src = `/file=html/${name}.jpg`;
+          }
+        })
+        .catch((e) => console.error('previewTheme:', e));
+    })
+    .catch((e) => console.error('previewTheme:', e));
 }
 
 async function browseFolder() {
@@ -415,11 +506,9 @@ async function browseFolder() {
 
 async function reconnectUI() {
   const gallery = gradioApp().getElementById('txt2img_gallery');
-  if (!gallery) return;
   const task_id = localStorage.getItem('task');
   const api_logo = Array.from(gradioApp().querySelectorAll('img')).filter((el) => el?.src?.endsWith('api-logo.svg'));
   if (api_logo.length > 0) api_logo[0].remove();
-  clearInterval(start_check); // eslint-disable-line no-use-before-define
   if (task_id) {
     debug('task check:', task_id);
     requestProgress(task_id, null, gallery, null, null, true);
@@ -447,5 +536,3 @@ async function reconnectUI() {
   sd_model_observer.observe(sd_model, { attributes: true, childList: true, subtree: true });
   log('reconnectUI');
 }
-
-const start_check = setInterval(reconnectUI, 100);

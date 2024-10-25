@@ -4,16 +4,18 @@ import inspect
 from collections import deque
 import torch
 from modules import prompt_parser
-from modules import devices
+from modules import devices, errors
 from modules import sd_samplers_common
 import modules.shared as shared
 from modules.script_callbacks import CFGDenoiserParams, cfg_denoiser_callback
 from modules.script_callbacks import CFGDenoisedParams, cfg_denoised_callback
 from modules.script_callbacks import AfterCFGCallbackParams, cfg_after_cfg_callback
-
+from modules.script_callbacks import ExtraNoiseParams, extra_noise_callback
+from installer import install
 
 # deal with k-diffusion imports
 k_sampling = None
+install('clean-fid')
 try:
     import k_diffusion # pylint: disable=wrong-import-order
     k_sampling = k_diffusion.sampling
@@ -24,8 +26,8 @@ try:
         import importlib
         k_diffusion = importlib.import_module('modules.k-diffusion.k_diffusion')
         k_sampling = k_diffusion.sampling
-except Exception:
-    pass
+except Exception as e:
+    errors.display(e, 'k-diffusion')
 if k_sampling is None:
     shared.log.info(f'Path search: {sys.path}')
     shared.log.error("Module not found: k-diffusion")
@@ -102,7 +104,7 @@ class CFGDenoiser(torch.nn.Module):
                 time.sleep(0.1)
         # at self.image_cfg_scale == 1.0 produced results for edit model are the same as with normal sampling,
         # so is_edit_model is set to False to support AND composition.
-        is_edit_model = (shared.sd_model is not None) and hasattr(shared.sd_model, 'cond_stage_key') and (shared.sd_model.cond_stage_key == "edit") and (self.image_cfg_scale is not None) and (self.image_cfg_scale != 1.0)
+        is_edit_model = shared.sd_loaded and hasattr(shared.sd_model, 'cond_stage_key') and (shared.sd_model.cond_stage_key == "edit") and (self.image_cfg_scale is not None) and (self.image_cfg_scale != 1.0)
         conds_list, tensor = prompt_parser.reconstruct_multicond_batch(cond, self.step)
         uncond = prompt_parser.reconstruct_cond_batch(uncond, self.step)
         assert not is_edit_model or all(len(conds) == 1 for conds in conds_list), "AND is not supported for InstructPix2Pix checkpoint (unless using Image CFG scale = 1.0)"
@@ -329,6 +331,13 @@ class KDiffusionSampler:
         sigmas = self.get_sigmas(p, steps)
         sigma_sched = sigmas[steps - t_enc - 1:]
         xi = x + noise * sigma_sched[0]
+        if shared.opts.img2img_extra_noise > 0:
+            p.extra_generation_params["Extra noise"] = shared.opts.img2img_extra_noise
+            extra_noise_params = ExtraNoiseParams(noise, x, xi)
+            extra_noise_callback(extra_noise_params)
+            noise = extra_noise_params.noise
+            xi += noise * shared.opts.img2img_extra_noise
+
         extra_params_kwargs = self.initialize(p)
         parameters = inspect.signature(self.func).parameters
         if 'sigma_min' in parameters:

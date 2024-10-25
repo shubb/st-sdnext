@@ -2,8 +2,9 @@
   "parserOptions": {
     "ecmaVersion": 2020
   },
-  "plugins": [],
+  "plugins": ["html", "json"],
   "extends": [
+    "plugin:json/recommended",
     "eslint:recommended",
     "airbnb-base"
   ],
@@ -18,6 +19,7 @@
     "max-len": [1, 275, 3],
     "camelcase":"off",
     "default-case":"off",
+    "no-await-in-loop":"off",
     "no-bitwise":"off",
     "no-confusing-arrow":"off",
     "no-console":"off",
@@ -39,7 +41,7 @@
   "globals": {
     // asssets
     "panzoom": "readonly",
-    //script.js
+    // script.js
     "log": "readonly",
     "debug": "readonly",
     "gradioApp": "readonly",
@@ -49,11 +51,19 @@
     "optionsChangedCallbacks": "readonly",
     "onUiLoaded": "readonly",
     "onUiUpdate": "readonly",
+    "onUiTabChange": "readonly",
+    "onUiReady": "readonly",
     "uiCurrentTab": "writable",
     "uiElementIsVisible": "readonly",
     "uiElementInSight": "readonly",
     "getUICurrentTabContent": "readonly",
-    //ui.js
+    "waitForFlag": "readonly",
+    "logFn": "readonly",
+    // contextmenus.js
+    "generateForever": "readonly",
+    // contributors.js
+    "showContributors": "readonly",
+    // ui.js
     "opts": "writable",
     "sortUIElements": "readonly",
     "all_gallery_buttons": "readonly",
@@ -71,9 +81,11 @@
     "restartReload": "readonly",
     "updateInput": "readonly",
     "toggleCompact": "readonly",
+    "setFontSize": "readonly",
+    "setTheme": "readonly",
     // settings.js
     "registerDragDrop": "readonly",
-    //extraNetworks.js
+    // extraNetworks.js
     "requestGet": "readonly",
     "getENActiveTab": "readonly",
     "quickApplyStyle": "readonly",
@@ -86,13 +98,22 @@
     // imageviewer.js
     "modalPrevImage": "readonly",
     "modalNextImage": "readonly",
+    "galleryClickEventHandler": "readonly",
+    "getExif": "readonly",
     // logMonitor.js
     "jobStatusEl": "readonly",
     // loader.js
     "removeSplash": "readonly",
     // nvml.js
     "initNVML": "readonly",
-    "disableNVML": "readonly"
+    "disableNVML": "readonly",
+    // indexdb.js
+    "idbGet": "readonly",
+    "idbPut": "readonly",
+    "idbDel": "readonly",
+    "idbAdd": "readonly",
+    // notification.js
+    "sendNotification": "readonly"
   },
   "ignorePatterns": [
     "node_modules",
@@ -100,6 +121,9 @@
     "extensions-builtin",
     "repositories",
     "venv",
-    "panzoom.js"
+    "panzoom.js",
+    "split.js",
+    "exifr.js",
+    "iframeResizer.min.js"
   ]
 }

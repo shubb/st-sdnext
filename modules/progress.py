@@ -62,8 +62,7 @@ def progressapi(req: ProgressRequest):
     paused = shared.state.paused
     if not active:
         return InternalProgressResponse(job=shared.state.job, active=active, queued=queued, paused=paused, completed=completed, id_live_preview=-1, textinfo="Queued..." if queued else "Waiting...")
-    if shared.state.job_no > shared.state.job_count:
-        shared.state.job_count = shared.state.job_no
+    shared.state.job_count = max(shared.state.frame_count, shared.state.job_count, shared.state.job_no)
     batch_x = max(shared.state.job_no, 0)
     batch_y = max(shared.state.job_count, 1)
     step_x = max(shared.state.sampling_step, 0)
@@ -71,11 +70,10 @@ def progressapi(req: ProgressRequest):
     current = step_y * batch_x + step_x
     total = step_y * batch_y
     progress = min(1, abs(current / total) if total > 0 else 0)
-    elapsed = time.time() - shared.state.time_start
+    elapsed = time.time() - shared.state.time_start if shared.state.time_start is not None else 0
     predicted = elapsed / progress if progress > 0 else None
     eta = predicted - elapsed if predicted is not None else None
     # shared.log.debug(f'Progress: step={step_x}:{step_y} batch={batch_x}:{batch_y} current={current} total={total} progress={progress} elapsed={elapsed} eta={eta}')
-
     id_live_preview = req.id_live_preview
     live_preview = None
     shared.state.set_current_image()

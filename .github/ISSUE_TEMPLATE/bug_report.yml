@@ -26,19 +26,21 @@ body:
         Easiest is to include top part of console log, for example:  
         ```log
         Starting SD.Next
-        Python 3.10.6 on Linux
-        Version: abd7d160 Sat Jun 10 07:37:42 2023 -0400
-        nVidia CUDA toolkit detected
-        Torch 2.1.0.dev20230519+cu121
-        Torch backend: nVidia CUDA 12.1 cuDNN 8801
-        Torch detected GPU: NVIDIA GeForce RTX 3060 VRAM 12288 Arch (8, 6) Cores 28
-        Enabled extensions-builtin: [...]
-        Enabled extensions: [...]
+        Version: app=sd.next updated=2024-06-28 hash=1fc20e72 branch=dev url=https://github.com/vladmandic/automatic/tree/dev ui=dev
+        Branch sync failed: sdnext=dev ui=dev
+        Platform: arch=x86_64 cpu=x86_64 system=Linux release=5.15.153.1-microsoft-standard-WSL2 python=3.12.3
+        Torch allocator: "garbage_collection_threshold:0.80,max_split_size_mb:512"
+        Load packages: {'torch': '2.3.1+cu121', 'diffusers': '0.29.1', 'gradio': '3.43.2'}
+        Engine: backend=Backend.DIFFUSERS compute=cuda device=cuda attention="Scaled-Dot-Product" mode=no_grad
+        Device: device=NVIDIA GeForce RTX 4090 n=1 arch=sm_90 cap=(8, 9) cuda=12.1 cudnn=8902 driver=555.99
+        Extensions: enabled=['sd-webui-agent-scheduler', 'sd-extension-chainner', 'sd-extension-system-info', 'sdnext-modernui', 'Lora'] extensions-builtin
+        Extensions: enabled=[] extensions
         ```
   - type: markdown
     attributes:
       value: |
         Please follow these guidelines when creating an issue:  
+        - If issue is related to ModernUI, create issue at [ModernUI issues](https://github.com/BinaryQuantumSoul/sdnext-modernui/issues)
         - If possible update to latest version before reporting the issue as older versions cannot be properly supported  
           And search existing **issues** and **discussions** before creating a new one  
         - If issue cannot be clearly seen in the provided log, run SD.Next with debug logging enabled by adding `--debug` to your command line parameters
@@ -67,9 +69,21 @@ body:
       label: Backend
       description: What is the backend you're using?
       options:
-        - Original
         - Diffusers
+        - Original
       default: 0
+    validations:
+      required: true
+  - type: dropdown
+    id: ui
+    attributes:
+      label: UI
+      description: Which UI are you're using?
+      options:
+        - API
+        - Standard
+        - ModernUI
+      default: 1
     validations:
       required: true
   - type: dropdown
@@ -89,12 +103,12 @@ body:
       label: Model
       description: What is the model type you're using?
       options:
-        - SD 1.5
-        - SD 2.1
-        - SD-XL
-        - LCM
+        - StableDiffusion 1.5
+        - StableDiffusion 2.1
+        - StableDiffusion XL
+        - StableDiffusion 3
         - PixArt
-        - SSD
+        - StableCascade
         - Kandinsky
         - Other
       default: 0

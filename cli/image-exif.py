@@ -4,11 +4,17 @@ import os
 import io
 import re
 import sys
-import json
+import importlib.util
 from PIL import Image, ExifTags, TiffImagePlugin, PngImagePlugin
 from rich import print # pylint: disable=redefined-builtin
 
-# warnings.filterwarnings("ignore", category=UserWarning)
+
+module_file = os.path.abspath(__file__)
+module_dir = os.path.dirname(module_file)
+module_spec = importlib.util.spec_from_file_location('infotext', os.path.join(module_dir, '..', 'modules', 'infotext.py'))
+infotext = importlib.util.module_from_spec(module_spec)
+module_spec.loader.exec_module(infotext)
+
 
 
 class Exif: # pylint: disable=single-string-used-for-slots
@@ -32,6 +38,8 @@ class Exif: # pylint: disable=single-string-used-for-slots
         try:
             exif_dict = dict(img._getexif().items()) # pylint: disable=protected-access
         except Exception:
+            pass
+        if not exif_dict:
             exif_dict = dict(img.info.items())
         for key, val in exif_dict.items():
             if isinstance(val, bytes): # decode bytestring
@@ -69,6 +77,11 @@ class Exif: # pylint: disable=single-string-used-for-slots
                 pass
         return None
 
+    def parse(self):
+        x = self.exif.pop('parameters', None) or self.exif.pop('UserComment', None)
+        res = infotext.parse(x)
+        return res
+
     def get_bytes(self):
         ifd = TiffImagePlugin.ImageFileDirectory_v2()
         exif_stream = io.BytesIO()
@@ -87,13 +100,13 @@ def read_exif(filename: str):
         from pi_heif import register_heif_opener
         register_heif_opener()
     try:
-        img = Image.open(filename)
-        exif = Exif(img)
-        print('image:', filename, 'format:', img.format, 'metadata:', json.dumps(vars(exif.exif)['_data'], indent=2))
+        image = Image.open(filename)
+        exif = Exif(image)
+        print('image:', filename, 'format:', image)
+        print('exif:', vars(exif.exif)['_data'])
+        print('info:', exif.parse())
     except Exception as e:
         print('metadata error reading:', filename, e)
-    # exif.exif['Software'] = 'This is a Test'
-    # img.save('input-scored.jpg', exif=exif.bytes())
 
 
 if __name__ == '__main__':
@@ -107,3 +120,5 @@ if __name__ == '__main__':
             for root, _dirs, files in os.walk(fn):
                 for file in files:
                     read_exif(os.path.join(root, file))
+        else:
+            print('file not found: ', fn)

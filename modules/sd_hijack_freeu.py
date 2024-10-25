@@ -1,8 +1,7 @@
 import math
 import functools
 import torch
-from modules import shared
-from modules.sd_hijack_unet import th
+from modules import shared, devices
 
 # based on <https://github.com/ljleb/sd-webui-freeu/blob/main/lib_free_u/unet.py>
 # official params are b1,b2,s1,s2
@@ -59,6 +58,8 @@ def free_u_cat_hijack(hs, *args, original_function, **kwargs):
     except ValueError:
         return original_function(hs, *args, **kwargs)
     dims = h.shape[1]
+    if dims not in [1280, 640, 320]:
+        return original_function(hs, *args, **kwargs)
     index = [1280, 640, 320].index(dims)
     if index > 1: # not 1st or 2nd stage
         return original_function([h, h_skip], *args, **kwargs)
@@ -72,6 +73,24 @@ def free_u_cat_hijack(hs, *args, original_function, **kwargs):
     h[:, mask] *= lerp(1, backbone_factor, schedule_ratio)
     h_skip = filter_skip(h_skip, threshold=skip_cutoff, scale=lerp(1, skip_factor, schedule_ratio), scale_high=lerp(1, skip_high_end_factor, schedule_ratio))
     return original_function([h, h_skip], *args, **kwargs)
+
+
+torch_fft_device = None
+def get_fft_device():
+    global torch_fft_device # pylint: disable=global-statement
+    if torch_fft_device is None:
+        try:
+            tensor = torch.randn(4, 4)
+            tensor = tensor.to(device=devices.device, dtype=devices.dtype)
+            _fft_result = torch.fft.fftn(tensor)
+            _ifft_result = torch.fft.ifftn(_fft_result)
+            _shifted_tensor = torch.fft.fftshift(tensor)
+            _ishifted_tensor = torch.fft.ifftshift(_shifted_tensor)
+            torch_fft_device = devices.device
+        except Exception:
+            torch_fft_device = devices.cpu
+            shared.log.warning(f'FreeU: device={devices.device} dtype={devices.dtype} does not support FFT')
+    return torch_fft_device
 
 
 def no_gpu_complex_support():
@@ -88,9 +107,9 @@ def no_gpu_complex_support():
 def filter_skip(x, threshold, scale, scale_high):
     if scale == 1 and scale_high == 1:
         return x
-    fft_device = x.device
-    if no_gpu_complex_support():
-        fft_device = "cpu"
+    fft_device = get_fft_device()
+    # if no_gpu_complex_support():
+    #    fft_device = "cpu"
     # FFT
     x_freq = torch.fft.fftn(x.to(fft_device).float(), dim=(-2, -1)) # pylint: disable=E1102
     x_freq = torch.fft.fftshift(x_freq, dim=(-2, -1)) # pylint: disable=E1102
@@ -127,6 +146,7 @@ def ratio_to_region(width: float, offset: float, n: int):
 
 
 def apply_freeu(p, backend_original):
+    from modules.sd_hijack_unet import th
     global state_enabled # pylint: disable=global-statement
     global cat_original # pylint: disable=global-statement
     if backend_original:
@@ -142,11 +162,13 @@ def apply_freeu(p, backend_original):
                 state_enabled = False
     elif hasattr(p.sd_model, 'enable_freeu'):
         if shared.opts.freeu_enabled:
-            p.extra_generation_params['FreeU'] = f'b1={shared.opts.freeu_b1} b2={shared.opts.freeu_b2} s1={shared.opts.freeu_s1} s2={shared.opts.freeu_s2}'
-            p.sd_model.enable_freeu(s1=shared.opts.freeu_s1, s2=shared.opts.freeu_s2, b1=shared.opts.freeu_b1, b2=shared.opts.freeu_b2)
-            state_enabled = True
+            freeu_device = get_fft_device()
+            if freeu_device != devices.cpu:
+                p.extra_generation_params['FreeU'] = f'b1={shared.opts.freeu_b1} b2={shared.opts.freeu_b2} s1={shared.opts.freeu_s1} s2={shared.opts.freeu_s2}'
+                p.sd_model.enable_freeu(s1=shared.opts.freeu_s1, s2=shared.opts.freeu_s2, b1=shared.opts.freeu_b1, b2=shared.opts.freeu_b2)
+                state_enabled = True
         elif state_enabled:
             p.sd_model.disable_freeu()
             state_enabled = False
-    if shared.opts.freeu_enabled:
+    if shared.opts.freeu_enabled and state_enabled:
         shared.log.info(f'Applying free-u: b1={shared.opts.freeu_b1} b2={shared.opts.freeu_b2} s1={shared.opts.freeu_s1} s2={shared.opts.freeu_s2}')

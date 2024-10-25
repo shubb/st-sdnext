@@ -54,7 +54,7 @@ def to_half(tensor, enable):
 
 
 def run_modelmerger(id_task, **kwargs):  # pylint: disable=unused-argument
-    shared.state.begin('merge')
+    shared.state.begin('Merge')
     t0 = time.time()
 
     def fail(message):
@@ -83,15 +83,15 @@ def run_modelmerger(id_task, **kwargs):  # pylint: disable=unused-argument
         kwargs["models"] |= {"model_c": sd_models.get_closet_checkpoint_match(kwargs.get("tertiary_model_name", None)).filename}
         del kwargs["tertiary_model_name"]
 
-    if hasattr(kwargs, "alpha_base") and hasattr(kwargs, "alpha_in_blocks") and hasattr(kwargs, "alpha_mid_block") and hasattr(kwargs, "alpha_out_blocks"):
+    if kwargs.get("alpha_base", None) and kwargs.get("alpha_in_blocks", None) and kwargs.get("alpha_mid_block", None) and kwargs.get("alpha_out_blocks", None):
         try:
             alpha = [float(x) for x in
                     [kwargs["alpha_base"]] + kwargs["alpha_in_blocks"].split(",") + [kwargs["alpha_mid_block"]] + kwargs["alpha_out_blocks"].split(",")]
-            assert len(alpha) == 26 or len(alpha) == 20, "Alpha Block Weights are wrong length (26 or 20 for SDXL) falling back"
+            assert len(alpha) == 26 or len(alpha) == 20, "Alpha Block Weights are wrong length (26 or 20 for SDXL)"
             kwargs["alpha"] = alpha
         except KeyError as ke:
             shared.log.warning(f"Merge: Malformed manual block weight: {ke}")
-    elif hasattr(kwargs, "alpha_preset") or hasattr(kwargs, "alpha"):
+    elif kwargs.get("alpha_preset", None) or kwargs.get("alpha", None):
         kwargs["alpha"] = kwargs.get("alpha_preset", kwargs["alpha"])
 
     kwargs.pop("alpha_base", None)
@@ -100,15 +100,15 @@ def run_modelmerger(id_task, **kwargs):  # pylint: disable=unused-argument
     kwargs.pop("alpha_out_blocks", None)
     kwargs.pop("alpha_preset", None)
 
-    if hasattr(kwargs, "beta_base") and hasattr(kwargs, "beta_in_blocks") and hasattr(kwargs, "beta_mid_block") and hasattr(kwargs, "beta_out_blocks"):
+    if kwargs.get("beta_base", None) and kwargs.get("beta_in_blocks", None) and kwargs.get("beta_mid_block", None) and kwargs.get("beta_out_blocks", None):
         try:
             beta = [float(x) for x in
                     [kwargs["beta_base"]] + kwargs["beta_in_blocks"].split(",") + [kwargs["beta_mid_block"]] + kwargs["beta_out_blocks"].split(",")]
-            assert len(beta) == 26 or len(beta) == 20, "Beta Block Weights are wrong length (26 or 20 for SDXL) falling back"
+            assert len(beta) == 26 or len(beta) == 20, "Beta Block Weights are wrong length (26 or 20 for SDXL)"
             kwargs["beta"] = beta
         except KeyError as ke:
             shared.log.warning(f"Merge: Malformed manual block weight: {ke}")
-    elif hasattr(kwargs, "beta_preset") or hasattr(kwargs, "beta"):
+    elif kwargs.get("beta_preset", None) or kwargs.get("beta", None):
         kwargs["beta"] = kwargs.get("beta_preset", kwargs["beta"])
 
     kwargs.pop("beta_base", None)
@@ -284,9 +284,9 @@ def run_modelconvert(model, checkpoint_formats, precision, conv_type, custom_nam
         "vae": vae_conv,
         "other": others_conv
     }
-    shared.state.begin('convert')
+    shared.state.begin('Convert')
     model_info = sd_models.checkpoints_list[model]
-    shared.state.textinfo = f"Loading {model_info.filename}..."
+    shared.state.textinfo = f"Load {model_info.filename}..."
     shared.log.info(f"Model convert loading: {model_info.filename}")
     state_dict = load_model(model_info.filename)
 

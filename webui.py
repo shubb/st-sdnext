@@ -11,38 +11,34 @@ from threading import Thread
 import modules.loader
 import torch # pylint: disable=wrong-import-order
 from modules import timer, errors, paths # pylint: disable=unused-import
-local_url = None
-from installer import log, git_commit
-import ldm.modules.encoders.modules # pylint: disable=W0611,C0411,E0401
-from modules import shared, extensions, extra_networks, ui_tempdir, ui_extra_networks, modelloader # pylint: disable=ungrouped-imports
+from installer import log, git_commit, custom_excepthook
+import ldm.modules.encoders.modules # pylint: disable=unused-import, wrong-import-order
+from modules import shared, extensions, gr_tempdir, modelloader # pylint: disable=ungrouped-imports
+from modules import extra_networks, ui_extra_networks # pylint: disable=ungrouped-imports
 from modules.paths import create_paths
-from modules.call_queue import queue_lock, wrap_queued_call, wrap_gradio_gpu_call # pylint: disable=W0611,C0411,C0412
+from modules.call_queue import queue_lock, wrap_queued_call, wrap_gradio_gpu_call # pylint: disable=unused-import
 import modules.devices
-
 import modules.sd_samplers
-import modules.upscaler
-import modules.img2img
 import modules.lowvram
 import modules.scripts
-import modules.sd_hijack
 import modules.sd_models
 import modules.sd_vae
-import modules.txt2img
-import modules.script_callbacks
-import modules.textual_inversion.textual_inversion
+import modules.sd_unet
+import modules.model_te
 import modules.progress
 import modules.ui
-from modules.shared import cmd_opts, opts
+import modules.txt2img
+import modules.img2img
+import modules.upscaler
+import modules.textual_inversion.textual_inversion
 import modules.hypernetworks.hypernetwork
-from modules.middleware import setup_middleware
+import modules.script_callbacks
+from modules.api.middleware import setup_middleware
+from modules.shared import cmd_opts, opts # pylint: disable=unused-import
 
 
-try:
-    from installer import custom_excepthook # pylint: disable=ungrouped-imports
-    sys.excepthook = custom_excepthook
-except Exception:
-    pass
-
+sys.excepthook = custom_excepthook
+local_url = None
 state = shared.state
 backend = shared.backend
 if not modules.loader.initialized:
@@ -51,19 +47,21 @@ if cmd_opts.server_name:
     server_name = cmd_opts.server_name
 else:
     server_name = "0.0.0.0" if cmd_opts.listen else None
-
 fastapi_args = {
     "version": f'0.0.{git_commit}',
     "title": "SD.Next",
     "description": "SD.Next",
     "docs_url": "/docs" if cmd_opts.docs else None,
-    "redocs_url": "/redocs" if cmd_opts.docs else None,
+    "redoc_url": "/redocs" if cmd_opts.docs else None,
     "swagger_ui_parameters": {
         "displayOperationId": True,
         "showCommonExtensions": True,
         "deepLinking": False,
     }
 }
+
+import modules.sd_hijack
+timer.startup.record("ldm")
 modules.loader.initialized = True
 
 
@@ -72,7 +70,7 @@ def check_rollback_vae():
         if not torch.cuda.is_available():
             log.error("Rollback VAE functionality requires compatible GPU")
             shared.cmd_opts.rollback_vae = False
-        elif not torch.__version__.startswith('2.1'):
+        elif torch.__version__.startswith('1.') or torch.__version__.startswith('2.0'):
             log.error("Rollback VAE functionality requires Torch 2.1 or higher")
             shared.cmd_opts.rollback_vae = False
         elif 0 < torch.cuda.get_device_capability()[0] < 8:
@@ -90,6 +88,12 @@ def initialize():
     modules.sd_vae.refresh_vae_list()
     timer.startup.record("vae")
 
+    modules.sd_unet.refresh_unet_list()
+    timer.startup.record("unet")
+
+    modules.model_te.refresh_te_list()
+    timer.startup.record("unet")
+
     extensions.list_extensions()
     timer.startup.record("extensions")
 
@@ -98,27 +102,23 @@ def initialize():
     timer.startup.record("models")
 
     import modules.postprocess.codeformer_model as codeformer
-    codeformer.setup_model(opts.codeformer_models_path)
+    codeformer.setup_model(shared.opts.codeformer_models_path)
     sys.modules["modules.codeformer_model"] = codeformer
     import modules.postprocess.gfpgan_model as gfpgan
-    gfpgan.setup_model(opts.gfpgan_models_path)
-    timer.startup.record("face-restore")
+    gfpgan.setup_model(shared.opts.gfpgan_models_path)
+    import modules.postprocess.yolo as yolo
+    yolo.initialize()
+    timer.startup.record("detailer")
 
     log.debug('Load extensions')
     t_timer, t_total = modules.scripts.load_scripts()
     timer.startup.record("extensions")
     timer.startup.records["extensions"] = t_total # scripts can reset the time
-    log.info(f'Extensions time: {t_timer.summary()}')
+    log.debug(f'Extensions init time: {t_timer.summary()}')
 
     modelloader.load_upscalers()
     timer.startup.record("upscalers")
 
-    shared.opts.onchange("sd_vae", wrap_queued_call(lambda: modules.sd_vae.reload_vae_weights()), call=False)
-    shared.opts.onchange("temp_dir", ui_tempdir.on_tmpdir_changed)
-    # shared.opts.onchange("gradio_theme", shared.reload_gradio_theme)
-    timer.startup.record("onchange")
-
-    modules.textual_inversion.textual_inversion.list_textual_inversion_templates()
     shared.reload_hypernetworks()
     shared.prompt_styles.reload()
 
@@ -126,7 +126,7 @@ def initialize():
     ui_extra_networks.register_pages()
     extra_networks.initialize()
     extra_networks.register_default_extra_networks()
-    timer.startup.record("extra-networks")
+    timer.startup.record("networks")
 
     if cmd_opts.tls_keyfile is not None and cmd_opts.tls_certfile is not None:
         try:
@@ -155,8 +155,10 @@ def initialize():
 
 
 def load_model():
-    if opts.sd_checkpoint_autoload and (shared.cmd_opts.ckpt is not None and shared.cmd_opts.ckpt.lower() != 'none'):
-        shared.state.begin('load')
+    if not shared.opts.sd_checkpoint_autoload and shared.cmd_opts.ckpt is None:
+        log.debug('Model auto load disabled')
+    else:
+        shared.state.begin('Load')
         thread_model = Thread(target=lambda: shared.sd_model)
         thread_model.start()
         thread_refiner = Thread(target=lambda: shared.sd_refiner)
@@ -164,22 +166,22 @@ def load_model():
         shared.state.end()
         thread_model.join()
         thread_refiner.join()
-    else:
-        log.debug('Model auto load disabled')
+    timer.startup.record("checkpoint")
     shared.opts.onchange("sd_model_checkpoint", wrap_queued_call(lambda: modules.sd_models.reload_model_weights(op='model')), call=False)
     shared.opts.onchange("sd_model_refiner", wrap_queued_call(lambda: modules.sd_models.reload_model_weights(op='refiner')), call=False)
     shared.opts.onchange("sd_model_dict", wrap_queued_call(lambda: modules.sd_models.reload_model_weights(op='dict')), call=False)
     shared.opts.onchange("sd_vae", wrap_queued_call(lambda: modules.sd_vae.reload_vae_weights()), call=False)
+    shared.opts.onchange("sd_unet", wrap_queued_call(lambda: modules.sd_unet.load_unet(shared.sd_model)), call=False)
+    shared.opts.onchange("sd_text_encoder", wrap_queued_call(lambda: modules.sd_models.reload_text_encoder()), call=False)
     shared.opts.onchange("sd_backend", wrap_queued_call(lambda: modules.sd_models.change_backend()), call=False)
-    timer.startup.record("checkpoint")
+    shared.opts.onchange("temp_dir", gr_tempdir.on_tmpdir_changed)
+    timer.startup.record("onchange")
 
 
 def create_api(app):
     log.debug('Creating API')
     from modules.api.api import Api
     api = Api(app, queue_lock)
-    from modules.api.nvml import nvml_api
-    nvml_api(api)
     return api
 
 
@@ -214,11 +216,17 @@ def start_common():
         log.info(f'Using data path: {shared.cmd_opts.data_dir}')
     if shared.cmd_opts.models_dir is not None and len(shared.cmd_opts.models_dir) > 0 and shared.cmd_opts.models_dir != 'models':
         log.info(f'Using models path: {shared.cmd_opts.models_dir}')
-    create_paths(opts)
+    create_paths(shared.opts)
     async_policy()
     initialize()
+    try:
+        from installer import diffusers_commit
+        if diffusers_commit != 'unknown':
+            shared.opts.diffusers_version = diffusers_commit # update installed diffusers version
+    except Exception:
+        pass
     if shared.opts.clean_temp_dir_at_start:
-        ui_tempdir.cleanup_tmpdr()
+        gr_tempdir.cleanup_tmpdr()
         timer.startup.record("cleanup")
 
 
@@ -249,6 +257,12 @@ def start_ui():
 
     global local_url # pylint: disable=global-statement
     stdout = io.StringIO()
+    allowed_paths = [os.path.dirname(__file__)]
+    if cmd_opts.data_dir is not None and os.path.isdir(cmd_opts.data_dir):
+        allowed_paths.append(cmd_opts.data_dir)
+    if cmd_opts.allowed_paths is not None:
+        allowed_paths += [p for p in cmd_opts.allowed_paths if os.path.isdir(p)]
+    shared.log.debug(f'Root paths: {allowed_paths}')
     with contextlib.redirect_stdout(stdout):
         app, local_url, share_url = shared.demo.launch( # app is FastAPI(Starlette) instance
             share=cmd_opts.share,
@@ -263,15 +277,18 @@ def start_ui():
             max_threads=64,
             show_api=False,
             quiet=True,
-            favicon_path='html/logo.ico',
-            allowed_paths=[os.path.dirname(__file__), cmd_opts.data_dir],
+            # favicon_path='html/logo.ico',
+            favicon_path='html/favicon.svg',
+            allowed_paths=allowed_paths,
             app_kwargs=fastapi_args,
+            _frontend=True and cmd_opts.share,
         )
     if cmd_opts.data_dir is not None:
-        ui_tempdir.register_tmp_file(shared.demo, os.path.join(cmd_opts.data_dir, 'x'))
+        gr_tempdir.register_tmp_file(shared.demo, os.path.join(cmd_opts.data_dir, 'x'))
     shared.log.info(f'Local URL: {local_url}')
     if cmd_opts.docs:
         shared.log.info(f'API Docs: {local_url[:-1]}/docs') # pylint: disable=unsubscriptable-object
+        shared.log.info(f'API ReDocs: {local_url[:-1]}/redocs') # pylint: disable=unsubscriptable-object
     if share_url is not None:
         shared.log.info(f'Share URL: {share_url}')
     shared.log.debug(f'Gradio functions: registered={len(shared.demo.fns)}')
@@ -286,7 +303,7 @@ def start_ui():
     timer.startup.record("launch")
 
     modules.progress.setup_progress_api(app)
-    create_api(app)
+    shared.api = create_api(app)
     timer.startup.record("api")
 
     ui_extra_networks.init_api(app)
@@ -308,20 +325,22 @@ def webui(restart=False):
 
     start_common()
     start_ui()
+    modules.script_callbacks.after_ui_callback()
     modules.sd_models.write_metadata()
     load_model()
     shared.opts.save(shared.config_filename)
     if cmd_opts.profile:
         for k, v in modules.script_callbacks.callback_map.items():
             shared.log.debug(f'Registered callbacks: {k}={len(v)} {[c.script for c in v]}')
-    log.info(f"Startup time: {timer.startup.summary()}")
-    debug = log.info if os.environ.get('SD_SCRIPT_DEBUG', None) is not None else lambda *args, **kwargs: None
-    debug('Loaded scripts:')
+    debug = log.trace if os.environ.get('SD_SCRIPT_DEBUG', None) is not None else lambda *args, **kwargs: None
+    debug('Trace: SCRIPTS')
     for m in modules.scripts.scripts_data:
         debug(f'  {m}')
     debug('Loaded postprocessing scripts:')
     for m in modules.scripts.postprocessing_scripts_data:
         debug(f'  {m}')
+    modules.script_callbacks.print_timers()
+    log.info(f"Startup time: {timer.startup.summary()}")
     timer.startup.reset()
 
     if not restart:
@@ -331,7 +350,7 @@ def webui(restart=False):
                 continue
             logger.handlers = log.handlers
         # autolaunch only on initial start
-        if cmd_opts.autolaunch and local_url is not None:
+        if (shared.opts.autolaunch or cmd_opts.autolaunch) and local_url is not None:
             cmd_opts.autolaunch = False
             shared.log.info('Launching browser')
             import webbrowser
@@ -348,12 +367,12 @@ def api_only():
     from fastapi import FastAPI
     app = FastAPI(**fastapi_args)
     setup_middleware(app, cmd_opts)
-    api = create_api(app)
-    api.wants_restart = False
+    shared.api = create_api(app)
+    shared.api.wants_restart = False
     modules.script_callbacks.app_started_callback(None, app)
     modules.sd_models.write_metadata()
     log.info(f"Startup time: {timer.startup.summary()}")
-    server = api.launch()
+    server = shared.api.launch()
     return server
 
 

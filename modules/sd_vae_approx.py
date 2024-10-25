@@ -34,23 +34,27 @@ class VAEApprox(nn.Module):
 
 def nn_approximation(sample): # Approximate NN
     global sd_vae_approx_model # pylint: disable=global-statement
+    # ROCm throws memory exceptions and crashes the GPU with it if we use approx on the GPU
+    device = devices.device if devices.backend != "rocm" else "cpu"
+    dtype = devices.dtype_vae if devices.backend != "rocm" else torch.float32
     if sd_vae_approx_model is None:
         model_path = os.path.join(paths.models_path, "VAE-approx", "model.pt")
         sd_vae_approx_model = VAEApprox()
         if not os.path.exists(model_path):
             model_path = os.path.join(paths.script_path, "models", "VAE-approx", "model.pt")
-        approx_weights = torch.load(model_path, map_location='cpu' if devices.device.type != 'cuda' else None)
+        approx_weights = torch.load(model_path, map_location='cpu' if devices.device.type != 'cuda' or devices.backend == "rocm" else None)
         sd_vae_approx_model.load_state_dict(approx_weights)
         sd_vae_approx_model.eval()
-        sd_vae_approx_model.to(devices.device, devices.dtype)
-        shared.log.debug(f'Load VAE decode approximate: model="{model_path}"')
+        sd_vae_approx_model.to(device, dtype)
+        shared.log.debug(f'VAE load: type=approximate model={model_path}')
     try:
-        in_sample = sample.to(devices.device, devices.dtype).unsqueeze(0)
+        in_sample = sample.to(device, dtype).unsqueeze(0)
+        sd_vae_approx_model.to(device, dtype)
         x_sample = sd_vae_approx_model(in_sample)
-        x_sample = x_sample[0]
+        x_sample = x_sample[0].to(torch.float32).detach().cpu()
         return x_sample
     except Exception as e:
-        shared.log.error(f'Decode approximate: {e}')
+        shared.log.error(f'VAE decode approximate: {e}')
         return sample
 
 
@@ -71,8 +75,10 @@ def cheap_approximation(sample): # Approximate simple
         ]).reshape(3, 4, 1, 1)
         simple_bias = None
     try:
-        x_sample = nn.functional.conv2d(sample, simple_weights.to(sample.device, sample.dtype), simple_bias.to(sample.device, sample.dtype) if simple_bias is not None else None) # pylint: disable=not-callable
+        weights = simple_weights.to(sample.device, sample.dtype)
+        bias = simple_bias.to(sample.device, sample.dtype) if simple_bias is not None else None
+        x_sample = nn.functional.conv2d(sample, weights, bias) # pylint: disable=not-callable
         return x_sample
     except Exception as e:
-        shared.log.error(f'Decode simple: {e}')
+        shared.log.error(f'VAE decode simple: {e}')
         return sample
