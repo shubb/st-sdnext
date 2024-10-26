@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+FROM pytorch/pytorch:2.4.1-cuda11.8-cudnn9-runtime
 
 # ARGS
 ARG INSTALLDIR="/webui" \
