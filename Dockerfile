@@ -33,8 +33,10 @@ ENV PIP_CACHE_DIR=$INSTALLDIR/cache/pip
 
 # Install dependencies (pip, wheel)
 RUN pip install -U pip wheel
-    
 
+# Install deps
+RUN pip install -r $INSTALLDIR/requirements.txt
+    
 WORKDIR $INSTALLDIR
 # Start container as root in order to enable bind-mounts
 USER root
