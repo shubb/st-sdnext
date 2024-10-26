@@ -42,7 +42,6 @@ WORKDIR $INSTALLDIR
 USER root
 
 RUN ${INSTALLDIR}/entrypoint.sh --test \
-    --no-download \
     --skip-torch
 
 STOPSIGNAL SIGINT
