@@ -42,7 +42,10 @@ WORKDIR $INSTALLDIR
 USER root
 
 RUN ${INSTALLDIR}/entrypoint.sh --test \
-    --skip-torch
+    --skip-torch \
+    --reset \
+    --reinstall
+    
 
 STOPSIGNAL SIGINT
 # In order to pass variables along to Exec Form Bash, we need to copy them explicitly
